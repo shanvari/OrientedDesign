@@ -1,0 +1,336 @@
+import os
+import re
+import networkx as nx
+import matplotlib.pyplot as plt
+from graphviz import Digraph
+
+project_dir = "1 - QuickUML 2001"
+# project_dir = "2 - Lexi v0.1.1 alpha" #have problem
+# project_dir = "3 - JRefactory v2.6.24"
+# project_dir = "4 - Netbeans v1.0.x" #have problem
+# project_dir = "5 - JUnit v3.7" #have problem
+# project_dir = "8 - MapperXML v1.9.7"
+# project_dir = "10 - Nutch v0.4"
+# project_dir = "11 - PMD v1.8"
+# project_dir = "JHotDraw v5.1"
+
+class_files = []
+
+# Initialize sets for tracking vertices and edges
+vertices = list()
+edges = list()
+
+for dirpath, dirnames, filenames in os.walk(project_dir):
+    for filename in filenames:
+        if filename.endswith(".java"):
+            class_file_path = os.path.join(dirpath, filename)
+            class_files.append(class_file_path)
+
+class_delegations = {}
+
+for class_file in class_files:
+    class_name = os.path.splitext(os.path.basename(class_file))[0]
+    delegations = {}
+    with open(class_file, "r") as f:
+        content = f.read()
+        for match in re.findall(r"\b(\w+)\.(\w+)\(", content):
+            object_name, method_name = match
+            if object_name != "this":
+                if object_name not in delegations:
+                    delegations[object_name] = []
+                delegations[object_name].append(method_name)
+    class_delegations[class_name] = delegations
+
+for class_name in sorted(class_delegations.keys()):
+    #print(class_name)
+    delegations = class_delegations.get(class_name, {})
+    if len(delegations) > 0 and class_name[0].isupper():
+        if class_name not in vertices:
+            vertices.append(class_name)
+        for object_name, methods in delegations.items():
+            #print(" - Delegates to", object_name, "via methods:", ", ".join(methods))
+            if object_name[0].isupper():
+                edge = (class_name, object_name, int(5))
+                if edge not in edges:
+                    edges.append(edge)
+    else:
+        print()
+        #print(" - No Delegation relationships")
+    print()
+    ############################################################################
+
+    java_files = []
+    for root, dirs, files in os.walk(project_dir):
+        for file in files:
+            if file.endswith(".java"):
+                java_files.append(os.path.join(root, file))
+
+    all_classes = [os.path.splitext(os.path.basename(f))[0] for f in java_files]
+
+    class_names = set()
+    imports = {}
+    for java_file in java_files:
+        with open(java_file) as f:
+            content = f.read()
+            matches = re.findall(r"class\s+(\w+)\s*", content)
+            class_names.update(matches)
+            matches = re.findall(r"import\s+([\w\.]+);", content)
+            for match in matches:
+                parts = match.split('.')
+                package_name = '.'.join(parts[:-1])
+                class_name = parts[-1]
+                if package_name not in imports:
+                    imports[package_name] = [class_name]
+                else:
+                    imports[package_name].append(class_name)
+
+    associations = {}
+    for class_name in class_names:
+        associated_classes = []
+        for package_name, imported_classes in imports.items():
+            if class_name in imported_classes:
+                for imported_class in imported_classes:
+                    if imported_class != class_name and imported_class in all_classes:
+                        associated_classes.append(imported_class)
+        associations[class_name] = associated_classes
+
+    for class_name in sorted(all_classes):
+        #print(f"{class_name} is associated with:")
+        associated_classes = associations.get(class_name, [])
+        if not associated_classes:
+            print()
+            #print("- None")
+        elif class_name[0].isupper():
+            if class_name not in vertices :
+                vertices.append(class_name)
+            for associated_class in associated_classes:
+                #print(f"- {associated_class}")
+                if associated_class[0].isupper():
+                    edge = (class_name, associated_class, int(2))  # 2 represents the edge type
+                    if (edge[0], edge[1], int(5)) not in edges:
+                        if (edge[0], edge[1], int(2)) not in edges:
+                            edges.append(edge)
+                    else:
+                        edges.remove((edge[0], edge[1], int(5)))
+                        edges.append((edge[0], edge[1], int(10)))
+        print()
+############################################################################
+
+package_pattern = re.compile(r"package\s+([\w.]+)\s*;")
+class_pattern = re.compile(r"(public|private|protected)?\s*(abstract|static|final)?\s*(class|interface)(\s+(\w+)|\s+(<[\w\s,<>]+>)?\s*\{\s*(public|private|protected)\s+(static\s+)?(class|enum|interface)\s+(\w+))")
+field_pattern = re.compile(r"\b(private)\s+(final\s+)?([\w.]+)\s+(\w+)")
+
+package_name = ""
+classes = {}
+composition_dict = {}
+
+for root, dirs, files in os.walk(project_dir):
+    for filename in files:
+        if filename.endswith(".java"):
+            with open(os.path.join(root, filename), "r") as f:
+                java_code = f.read()
+
+            package_match = package_pattern.search(java_code)
+            if package_match:
+                package_name = package_match.group(1)
+
+            for class_match in class_pattern.finditer(java_code):
+                class_type = class_match.group(3)
+                class_name = class_match.group(5) or class_match.group(10)
+                if class_name not in classes:
+                    classes[class_name] = {
+                        "name": class_name,
+                        "type": class_type,
+                        "package": package_name,
+                        "fields": []
+                    }
+                for field_match in field_pattern.finditer(java_code):
+                    field_name = field_match.group(4)
+                    field_type = field_match.group(3)
+                    classes[class_name]["fields"].append((field_name, field_type))
+
+for class_info in classes.values():
+    composite_classes = []
+    for field_name, field_type in class_info["fields"]:
+        if field_type in classes and \
+           classes[field_type]["package"] == class_info["package"]:
+            composite_classes.append(classes[field_type]["name"])
+    if len(composite_classes) == 0:
+        composition_dict[class_info["name"]] = []
+    else:
+        composition_dict[class_info["name"]] = composite_classes
+
+for class_name, composite_classes in composition_dict.items():
+    if len(composite_classes) > 0 and class_name[0].isupper():
+        if class_name not in vertices:
+            vertices.append(class_name)
+        #print(f"{class_name} has a composition relationship with classes:")
+        for composition_class in composite_classes:
+            #print(f"- {composition_class}")
+            if composition_class[0].isupper():
+                edge = (class_name, composition_class, int(3))
+                if (edge[0], edge[1], int(5)) not in edges:
+                    if (edge[0], edge[1], int(2)) not in edges:
+                        edges.append((edge[0], edge[1], int(3)))
+                    else:
+                        edges.append((edge[0], edge[1], int(6)))
+                else:
+                    if (edge[0], edge[1], int(2)) not in edges:
+                        edges.append((edge[0], edge[1], int(15)))
+                    else:
+                        edges.append((edge[0], edge[1], int(30)))
+    else:
+        print()
+        #print(f"{class_name} has a composition relationship with classes:\n - NON")
+    print()
+
+
+project_path = "1 - QuickUML 2001"
+
+aggregation_pattern = re.compile(r"\b(class|interface)\s+(\w+)\s*\{.*\bprivate\s+(final\s+)?\b(\w+)(<.*>)?\s+(\w+)\s*;\s*\}\s*")
+
+java_files = []
+for root, dirs, files in os.walk(project_path):
+    for file in files:
+        if file.endswith(".java"):
+            java_files.append(os.path.join(root, file))
+
+classes = {}
+for java_file in java_files:
+    with open(java_file, "r") as f:
+        file_contents = f.read()
+        matches = re.findall(r"\b(class|interface)\s+(\w+)\b", file_contents)
+        for match in matches:
+            classes[match[1]] = {"file": java_file, "fields": []}
+
+for java_file in java_files:
+    with open(java_file, "r") as f:
+        file_contents = f.read()
+        matches = aggregation_pattern.findall(file_contents)
+        for match in matches:
+            source_class_name = match[1]
+            target_class_name = match[5]
+            if target_class_name not in classes:
+                continue
+
+            if "aggregations" not in classes[source_class_name]:
+                classes[source_class_name]["aggregations"] = []
+            classes[source_class_name]["aggregations"].append(target_class_name)
+
+for class_name, class_data in classes.items():
+    if "aggregations" in class_data and class_name[0].isupper():
+        #print(f"{class_name} has an aggregation relationship with:")
+        if class_name not in vertices:
+            vertices.append(class_name)
+        for agg in class_data["aggregations"]:
+            if agg not in vertices and agg[0].isupper():
+                # print(f"{target_classes}")
+                vertices.append(agg)
+            edge = (class_name, agg, int(7))
+            if (edge[0], edge[1], int(5)) not in edges:
+                if (edge[0], edge[1], int(2)) not in edges:
+                    if (edge[0], edge[1], int(3)) not in edges:
+                        edges.append((edge[0], edge[1], int(7)))
+                    else:
+                        edges.append((edge[0], edge[1], int(21)))
+                else:
+                    if (edge[0], edge[1], int(3)) not in edges:
+                        edges.append((edge[0], edge[1], int(14)))
+                    else:
+                        edges.append((edge[0], edge[1], int(42)))
+            else:
+                if (edge[0], edge[1], int(2)) not in edges:
+                    if (edge[0], edge[1], int(3)) not in edges:
+                        edges.append((edge[0], edge[1], int(35)))
+                    else:
+                        edges.append((edge[0], edge[1], int(105)))
+                else:
+                    if (edge[0], edge[1], int(3)) not in edges:
+                        edges.append((edge[0], edge[1], int(70)))
+                    else:
+                        edges.append((edge[0], edge[1], int(210)))
+    # else    print(" - NON")
+
+############################################################################
+
+print("number of clases = " ,len(vertices))
+print("number of relations = ",len(edges))
+
+# Calculate the degree of each vertex
+degrees = {}
+for ver in vertices:
+    degree = 0
+    for edge in edges:
+        if edge[0] == ver :
+            degree *= edge[2]
+    degrees[ver] = degree
+
+# Print the degrees of each vertex
+print(degrees)
+vertices = sorted(vertices)
+print(vertices)
+
+edges = sorted(edges)
+print(edges)
+
+
+# Create a new graph
+graph = Digraph('G', filename='class_associations.gv')
+graph.attr('graph', size='10,6')
+
+# Render and save the graph
+for ver in vertices:
+    graph.node(ver)
+
+for edge in edges:
+    graph.edge(edge[0], edge[1], label=str(edge[2]))
+
+graph.render(filename='graph', format='png', view=True)
+
+
+# Create a graph
+# graph1 = nx.Graph()
+# for ver in vertices:
+#     graph2.add_node(ver)
+#
+# for edge in edges:
+#     graph2.add_edge(edge[0], edge[1], label=str(edge[2]))
+# # Get the degree of each node in the graph
+# degrees = dict(graph1.degree())
+#
+# # Create a new graph that only includes nodes with degree greater than zero
+# nodes = [node for node, degree in degrees.items() if degree > 0]
+# # Get a list of all connected components in the graph
+# components = max(nx.connected_components(graph1),key=len)
+#
+# print(len(components))
+# # Loop through the list and create a separate plot for each component
+# for i, comp in enumerate(components):
+#     # Create a new subgraph from the component
+#     subgraph = graph1.subgraph(comp)
+#
+#     # Set the font size to small
+#     plt.rcParams['font.size'] = 8
+#
+#     # Draw the subgraph with larger node size and edges
+#     pos = nx.spring_layout(subgraph, k=1, iterations=20)  # Increase k parameter to space out nodes
+#     nx.draw_networkx_nodes(subgraph, pos, node_size=10)
+#     nx.draw_networkx_edges(subgraph, pos, width=4)  # Increase width parameter to make edges thicker
+#
+#     # Add node labels
+#     labels = nx.get_node_attributes(subgraph, 'name')
+#     nx.draw_networkx_labels(subgraph, pos, labels)
+#
+#     # Add edge labels
+#     edge_labels = nx.get_edge_attributes(subgraph, 'label')
+#     nx.draw_networkx_ed
+#     ge_labels(subgraph, pos, edge_labels)
+#
+#     # Set the title of the plot to show which component it belongs to
+#     plt.title(f"Component {i + 1}")
+#
+#     # Show the plot
+#     plt.show()
+#
+#
+#################################################################################
